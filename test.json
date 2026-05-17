@@ -1,0 +1,13 @@
+{
+    "action": "completed",
+    "workflow_run": {
+      "name": "CI",
+      "conclusion": "failure",
+      "id": 123456789,
+      "head_branch": "main"
+    },
+    "repository": {
+      "full_name": "Ethiopian-Cursor-Community/Team_3",
+      "html_url": "https://github.com/Ethiopian-Cursor-Community/Team_3"
+    }
+  }

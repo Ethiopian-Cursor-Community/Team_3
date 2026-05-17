@@ -1,7 +1,23 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import app from "./webhook";
 
-const PORT = process.env.PORT || 3000;
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+});
 
-app.listen(PORT, () => {
-  console.log(`CI Fixer running on port ${PORT}`);
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+});
+
+const PORT = Number(process.env.PORT) || 3000;
+
+const server = app.listen(PORT, () => {
+  console.log(`CI Failure Fixer listening on http://localhost:${PORT}`);
+  console.log(`Webhook endpoint: POST http://localhost:${PORT}/webhook`);
+});
+
+server.on("error", (err) => {
+  console.error("Server error:", err);
 });
