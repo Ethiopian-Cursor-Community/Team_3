@@ -121,19 +121,20 @@ app.post("/webhook", async (req, res) => {
   const branch = run.head_branch ?? "main";
   const token = process.env.GITHUB_TOKEN;
 
+  let logs: string;
   try {
-    const logs = token
+    logs = token
       ? await fetchWorkflowLogs(repository.full_name, run.id, token)
       : fallbackLogs(payload);
-
-    console.log(`CI failure: ${repository.full_name} run ${run.id} (${branch})`);
-
-    res.status(200).send("Agent triggered");
-    spawnAgentProcess(logs, repoUrl, branch);
   } catch (err) {
-    console.error("Webhook error:", err);
-    res.status(500).send(err instanceof Error ? err.message : "Internal error");
+    console.warn("Failed to fetch CI logs, using fallback:", (err as Error).message);
+    logs = fallbackLogs(payload);
   }
+
+  console.log(`CI failure: ${repository.full_name} run ${run.id} (${branch}), logsLength: ${logs.length}`);
+
+  res.status(200).send("Agent triggered");
+  spawnAgentProcess(logs, repoUrl, branch);
 });
 
 export default app;

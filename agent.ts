@@ -1,26 +1,22 @@
 import { Agent, CursorAgentError, type SDKAgent } from "@cursor/sdk";
 import type { Run } from "@cursor/sdk";
 
-const AGENT_RUN_TIMEOUT_MS = 3 * 60 * 1000;
+const AGENT_RUN_TIMEOUT_MS = 5 * 60 * 1000;
 
 function buildPrompt(logs: string, repoUrl: string): string {
   return `You are a CI failure fixer. A GitHub Actions workflow failed on ${repoUrl}.
 
 ## Task
-1. Diagnose the root cause from the CI logs below.
+1. Diagnose the root cause from the CI logs and the repository files.
 2. Implement a minimal, correct fix in the repository.
-3. Open a PR with a clear title and description explaining the failure and the fix.
+3. A pull request will be created automatically — focus on making the fix correct.
 
 ## CI logs
 \`\`\`
 ${logs}
 \`\`\`
 
-Fix the CI failure and open a PR.`;
-}
-
-function extractPrUrl(git: { branches: Array<{ prUrl?: string }> } | undefined): string | undefined {
-  return git?.branches?.find((b) => b.prUrl)?.prUrl;
+Do not stop after diagnosis. Make the fix before finishing.`;
 }
 
 function isTimeoutError(err: unknown): boolean {
@@ -35,7 +31,7 @@ async function withRunTimeout<T>(fn: () => Promise<T>): Promise<T> {
       fn(),
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
-          const err = new Error("Agent run timed out after 3 minutes");
+          const err = new Error("Agent run timed out after 5 minutes");
           err.name = "AgentTimeoutError";
           reject(err);
         }, AGENT_RUN_TIMEOUT_MS);
@@ -62,10 +58,8 @@ export async function fixCIFailure(
     agent = await Agent.create({
       apiKey: process.env.CURSOR_API_KEY!,
       model: { id: "composer-2" },
-      cloud: {
-        repos: [{ url: repoUrl, startingRef: branch }],
-        autoCreatePR: true,
-        skipReviewerRequest: true,
+      local: {
+        cwd: process.cwd(),
       },
     });
     console.log("[agent] Agent.create succeeded, agentId:", agent.agentId);
@@ -75,7 +69,7 @@ export async function fixCIFailure(
   }
 
   try {
-    const prUrl = await withRunTimeout(async () => {
+    await withRunTimeout(async () => {
       console.log("[agent] Calling agent.send...");
       run = await agent!.send(buildPrompt(logs, repoUrl));
       console.log("[agent] agent.send succeeded, runId:", run.id);
@@ -84,7 +78,14 @@ export async function fixCIFailure(
       console.log("[agent] Starting stream...");
       for await (const event of run.stream()) {
         eventCount++;
-        console.log(`[agent] Stream event #${eventCount}:`, event.type);
+        if (event.type === "tool_call") {
+          console.log(`[agent] Stream event #${eventCount}: tool_call — ${(event as any).name ?? (event as any).tool ?? JSON.stringify(event).slice(0, 80)}`);
+        } else if ((event as { type: string }).type === "tool_result") {
+          const preview = JSON.stringify((event as any).output ?? (event as any).result ?? event).slice(0, 120);
+          console.log(`[agent] Stream event #${eventCount}: tool_result — ${preview}`);
+        } else {
+          console.log(`[agent] Stream event #${eventCount}:`, event.type);
+        }
         if (event.type === "assistant") {
           for (const block of event.message.content) {
             if (block.type === "text") process.stdout.write(block.text);
@@ -92,32 +93,16 @@ export async function fixCIFailure(
         }
       }
       console.log(`[agent] Stream finished (${eventCount} events)`);
-
-      console.log("[agent] Calling run.wait()...");
-      const result = await run.wait();
-      console.log("[agent] run.wait() completed, status:", result.status);
-
-      if (result.status === "error") {
-        throw new Error(`Agent run failed (${result.id})`);
-      }
-
-      const url = extractPrUrl(result.git);
-      if (url) {
-        console.log("[agent] PR URL:", url);
-      } else {
-        console.log("[agent] No PR URL in result.git");
-      }
-      return url;
     });
 
-    return prUrl;
+    return undefined;
   } catch (err) {
     if (isTimeoutError(err)) {
-      console.error("[agent] Timeout: agent did not complete within 3 minutes");
-      if (run?.supports("cancel")) {
-        console.log("[agent] Cancelling run...");
+      console.error("[agent] Agent timed out after 5 minutes");
+      if (run) {
+        console.log("[agent] Attempting run cancel...");
         try {
-          await run.cancel();
+          await (run as any).cancel?.();
           console.log("[agent] Run cancelled");
         } catch (cancelErr) {
           console.error("[agent] Run cancel failed:", cancelErr);
